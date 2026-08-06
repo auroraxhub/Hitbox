@@ -1,0 +1,242 @@
+-- // 1. LIMPIEZA
+local CoreGui = game:GetService("CoreGui")
+if CoreGui:FindFirstChild("MVS_Pro_UI") then
+    CoreGui.MVS_Pro_UI:Destroy()
+end
+if getgenv().ESPDrawings then
+    for _, v in pairs(getgenv().ESPDrawings) do
+        if type(v) == "table" then
+            for _, line in pairs(v) do line:Remove() end
+        else
+            v:Remove()
+        end
+    end
+end
+getgenv().ESPDrawings = {}
+
+-- // 2. SERVICIOS Y ESTADO
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+
+getgenv().AimbotEnabled = false
+getgenv().ESPEnabled = false
+
+-- // 3. INTERFAZ MÓVIL (TÁCTIL)
+local ScreenGui = Instance.new("ScreenGui", CoreGui)
+ScreenGui.Name = "MVS_Pro_UI"
+ScreenGui.IgnoreGuiInset = true -- Ignora el notch del teléfono
+
+local function createDraggableRainbowButton(text, position, onToggle)
+    local Frame = Instance.new("Frame", ScreenGui)
+    Frame.Size = UDim2.new(0, 130, 0, 45)
+    Frame.Position = position
+    Frame.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+    Frame.BorderSizePixel = 2
+    Frame.Active = true
+
+    local Btn = Instance.new("TextButton", Frame)
+    Btn.Size = UDim2.new(1, 0, 1, 0)
+    Btn.BackgroundTransparency = 1
+    Btn.Text = text .. ": OFF"
+    Btn.Font = Enum.Font.Code
+    Btn.TextSize = 18
+
+    local dragging, dragInput, dragStart, startPos
+    local hasDragged = false
+
+    Frame.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            hasDragged = false
+            dragStart = input.Position
+            startPos = Frame.Position
+            input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then dragging = false end
+            end)
+        end
+    end)
+    Frame.InputChanged:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+            dragInput = input
+        end
+    end)
+    UserInputService.InputChanged:Connect(function(input)
+        if input == dragInput and dragging then
+            local delta = input.Position - dragStart
+            if delta.Magnitude > 5 then hasDragged = true end
+            Frame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+        end
+    end)
+
+    Btn.MouseButton1Click:Connect(function()
+        if hasDragged then return end
+        onToggle(Btn)
+    end)
+
+    RunService.RenderStepped:Connect(function()
+        local hue = tick() % 3 / 3
+        Frame.BorderColor3 = Color3.fromHSV(hue, 1, 1)
+        Btn.TextColor3 = Color3.fromHSV(hue, 1, 1)
+    end)
+
+    return Btn
+end
+
+local AimbotBtn = createDraggableRainbowButton("AIMBOT", UDim2.new(0.5, -140, 0.1, 0), function(Btn)
+    getgenv().AimbotEnabled = not getgenv().AimbotEnabled
+    Btn.Text = "AIMBOT: " .. (getgenv().AimbotEnabled and "ON" or "OFF")
+end)
+
+local ESPBtn = createDraggableRainbowButton("ESP BOX", UDim2.new(0.5, 10, 0.1, 0), function(Btn)
+    getgenv().ESPEnabled = not getgenv().ESPEnabled
+    Btn.Text = "ESP BOX: " .. (getgenv().ESPEnabled and "ON" or "OFF")
+end)
+
+-- // 4. SELECCIÓN DE OBJETIVO (el enemigo más cercano al centro de la pantalla)
+local function GetClosestTarget()
+    local closest, shortestDist = nil, math.huge
+    local cam = workspace.CurrentCamera
+    local center = cam.ViewportSize / 2
+
+    for _, v in pairs(Players:GetPlayers()) do
+        if v ~= LocalPlayer and v.Character and v.Character:FindFirstChild("HumanoidRootPart") and v.Character:FindFirstChild("Humanoid") and v.Character.Humanoid.Health > 0 then
+            local pos, onScreen = cam:WorldToViewportPoint(v.Character.HumanoidRootPart.Position)
+            if onScreen then
+                local dist = (Vector2.new(pos.X, pos.Y) - center).Magnitude
+                if dist < shortestDist and dist <= 400 then
+                    closest = v
+                    shortestDist = dist
+                end
+            end
+        end
+    end
+    return closest
+end
+
+-- // 5. RESPALDO: HITBOX EXPANDER
+task.spawn(function()
+    while task.wait(0.2) do
+        for _, player in ipairs(Players:GetPlayers()) do
+            if player ~= LocalPlayer and player.Character then
+                pcall(function()
+                    local hrp = player.Character:FindFirstChild("HumanoidRootPart")
+                    if hrp then
+                        if getgenv().AimbotEnabled then
+                            hrp.Size = Vector3.new(14, 14, 14)
+                            hrp.Transparency = 1
+                            hrp.CanCollide = false
+                        else
+                            hrp.Size = Vector3.new(2, 2, 1)
+                            hrp.Transparency = 1
+                            hrp.CanCollide = false
+                        end
+                    end
+                end)
+            end
+        end
+    end
+end)
+
+-- // 6. SILENT AIM PURO (hook __index: seguro, no crashea)
+local mt = getrawmetatable(game)
+local oldIndex = getgenv().oldIndex or mt.__index
+getgenv().oldIndex = oldIndex
+
+local indexHook = newcclosure(function(self, key)
+    if getgenv().AimbotEnabled and not checkcaller() then
+        if key == "Hit" or key == "Target" then
+            local target = GetClosestTarget()
+            if target and target.Character and target.Character:FindFirstChild("HumanoidRootPart") then
+                if key == "Hit" then
+                    return target.Character.HumanoidRootPart.CFrame
+                elseif key == "Target" then
+                    return target.Character.HumanoidRootPart
+                end
+            end
+        end
+    end
+    return oldIndex(self, key)
+end)
+
+setreadonly(mt, false)
+mt.__index = indexHook
+setreadonly(mt, true)
+
+-- Guardián: reaplica el hook si el juego lo resetea
+task.spawn(function()
+    while task.wait(2) do
+        local currMt = getrawmetatable(game)
+        if currMt.__index ~= indexHook then
+            setreadonly(currMt, false)
+            currMt.__index = indexHook
+            setreadonly(currMt, true)
+        end
+    end
+end)
+
+-- // 7. ESP BOX 2D (4 líneas, anclado al torso, SIN DELAY)
+local function CreateBoxESP(player)
+    local lines = {
+        Top = Drawing.new("Line"),
+        Bottom = Drawing.new("Line"),
+        Left = Drawing.new("Line"),
+        Right = Drawing.new("Line")
+    }
+
+    for _, line in pairs(lines) do
+        line.Thickness = 1.5
+        line.Visible = false
+    end
+    getgenv().ESPDrawings[player.Name] = lines
+
+    RunService.RenderStepped:Connect(function()
+        if not getgenv().ESPEnabled or not player.Character or not player.Character:FindFirstChild("HumanoidRootPart") or not player.Character:FindFirstChild("Humanoid") or player.Character.Humanoid.Health <= 0 then
+            for _, line in pairs(lines) do line.Visible = false end
+            return
+        end
+
+        local cam = workspace.CurrentCamera
+        local hrp = player.Character.HumanoidRootPart
+
+        local top3D = hrp.Position + Vector3.new(0, 3.5, 0)
+        local bottom3D = hrp.Position - Vector3.new(0, 3, 0)
+
+        local top2D, onScreenTop = cam:WorldToViewportPoint(top3D)
+        local bottom2D, onScreenBot = cam:WorldToViewportPoint(bottom3D)
+
+        if onScreenTop and onScreenBot then
+            local height = math.abs(top2D.Y - bottom2D.Y)
+            local width = height * 0.6
+
+            local centerX = (top2D.X + bottom2D.X) / 2
+            local centerY = (top2D.Y + bottom2D.Y) / 2
+
+            local tl = Vector2.new(centerX - width / 2, centerY - height / 2)
+            local tr = Vector2.new(centerX + width / 2, centerY - height / 2)
+            local bl = Vector2.new(centerX - width / 2, centerY + height / 2)
+            local br = Vector2.new(centerX + width / 2, centerY + height / 2)
+
+            local color = Color3.fromHSV(tick() % 3 / 3, 1, 1)
+
+            lines.Top.From = tl; lines.Top.To = tr; lines.Top.Color = color; lines.Top.Visible = true
+            lines.Bottom.From = bl; lines.Bottom.To = br; lines.Bottom.Color = color; lines.Bottom.Visible = true
+            lines.Left.From = tl; lines.Left.To = bl; lines.Left.Color = color; lines.Left.Visible = true
+            lines.Right.From = tr; lines.Right.To = br; lines.Right.Color = color; lines.Right.Visible = true
+        else
+            for _, line in pairs(lines) do line.Visible = false end
+        end
+    end)
+end
+
+for _, v in pairs(Players:GetPlayers()) do
+    if v ~= LocalPlayer then CreateBoxESP(v) end
+end
+Players.PlayerAdded:Connect(function(v) CreateBoxESP(v) end)
+Players.PlayerRemoving:Connect(function(v)
+    if getgenv().ESPDrawings[v.Name] then
+        for _, line in pairs(getgenv().ESPDrawings[v.Name]) do line:Remove() end
+        getgenv().ESPDrawings[v.Name] = nil
+    end
+end)
