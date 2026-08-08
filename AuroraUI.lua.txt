@@ -1,0 +1,458 @@
+--[[
+    Aurora X UI Library
+    Réplica exacta del layout mostrado (tabs, toggles, colores)
+    con branding propio y botón de minimizar funcional.
+
+    USO:
+        local AuroraUI = loadstring(game:HttpGet("https://aurorax.site/ui/AuroraUI.lua"))()
+        local Window = AuroraUI:CreateWindow("Aurora X")
+
+        local VisualTab = Window:AddTab("Visual")
+        local espBox = VisualTab:AddToggle("ESP Box", false, function(state)
+            print("ESP Box:", state)
+        end)
+        espBox:SetColorPicker(Color3.fromRGB(255, 80, 80))
+
+        local AimbotTab = Window:AddTab("Aimbot")
+        local MiscTab = Window:AddTab("Misc")
+        local WhitelistTab = Window:AddTab("Whitelist")
+        local TeleportTab = Window:AddTab("Teleport")
+]]
+
+local Players = game:GetService("Players")
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+local CoreGui = game:GetService("CoreGui")
+
+local LocalPlayer = Players.LocalPlayer
+
+--// THEME (idéntico al mockup) ------------------------------------------------
+local Theme = {
+    Background   = Color3.fromRGB(15, 23, 41),   -- panel oscuro
+    Sidebar      = Color3.fromRGB(18, 27, 48),
+    Section      = Color3.fromRGB(21, 31, 54),
+    Stroke       = Color3.fromRGB(35, 46, 74),
+    TextPrimary  = Color3.fromRGB(230, 233, 240),
+    TextDim      = Color3.fromRGB(150, 160, 180),
+    Accent       = Color3.fromRGB(59, 130, 246),  -- azul de los toggles activos
+    ToggleOff    = Color3.fromRGB(60, 68, 90),
+    Title        = Color3.fromRGB(96, 165, 250),
+}
+
+--// UTIL -----------------------------------------------------------------------
+local function create(class, props, children)
+    local inst = Instance.new(class)
+    for prop, value in pairs(props or {}) do
+        inst[prop] = value
+    end
+    for _, child in ipairs(children or {}) do
+        child.Parent = inst
+    end
+    return inst
+end
+
+local function tween(obj, props, time)
+    TweenService:Create(obj, TweenInfo.new(time or 0.18, Enum.EasingStyle.Quad), props):Play()
+end
+
+local function corner(radius)
+    return create("UICorner", {CornerRadius = UDim.new(0, radius or 6)})
+end
+
+local function stroke(color, thickness)
+    return create("UIStroke", {Color = color or Theme.Stroke, Thickness = thickness or 1})
+end
+
+--// LIBRARY BASE -----------------------------------------------------------------
+local AuroraUI = {}
+AuroraUI.__index = AuroraUI
+
+function AuroraUI:CreateWindow(title)
+    -- Remove any previous instance
+    local existing = CoreGui:FindFirstChild("AuroraUI_ScreenGui")
+    if existing then existing:Destroy() end
+
+    local ScreenGui = create("ScreenGui", {
+        Name = "AuroraUI_ScreenGui",
+        ResetOnSpawn = false,
+        ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+        Parent = CoreGui,
+    })
+
+    -- Main container
+    local Main = create("Frame", {
+        Name = "Main",
+        Size = UDim2.new(0, 620, 0, 430),
+        Position = UDim2.new(0.5, -310, 0.5, -215),
+        BackgroundColor3 = Theme.Background,
+        BorderSizePixel = 0,
+        Parent = ScreenGui,
+    }, {corner(10), stroke(Theme.Stroke, 1)})
+
+    -- Top bar
+    local TopBar = create("Frame", {
+        Name = "TopBar",
+        Size = UDim2.new(1, 0, 0, 46),
+        BackgroundColor3 = Theme.Sidebar,
+        BorderSizePixel = 0,
+        Parent = Main,
+    }, {corner(10)})
+    -- mask bottom corners of topbar square
+    create("Frame", {
+        Size = UDim2.new(1, 0, 0, 10),
+        Position = UDim2.new(0, 0, 1, -10),
+        BackgroundColor3 = Theme.Sidebar,
+        BorderSizePixel = 0,
+        Parent = TopBar,
+    })
+
+    local LogoLabel = create("TextLabel", {
+        Text = title or "Aurora X",
+        Font = Enum.Font.GothamBold,
+        TextSize = 18,
+        TextColor3 = Theme.Title,
+        BackgroundTransparency = 1,
+        Position = UDim2.new(0, 16, 0, 0),
+        Size = UDim2.new(0, 200, 1, 0),
+        TextXAlignment = Enum.TextXAlignment.Left,
+        Parent = TopBar,
+    })
+
+    -- Minimize button
+    local MinimizeBtn = create("TextButton", {
+        Name = "MinimizeBtn",
+        Text = "—",
+        Font = Enum.Font.GothamBold,
+        TextSize = 20,
+        TextColor3 = Theme.TextPrimary,
+        BackgroundColor3 = Theme.Section,
+        Size = UDim2.new(0, 32, 0, 32),
+        Position = UDim2.new(1, -44, 0, 7),
+        Parent = TopBar,
+    }, {corner(8)})
+
+    -- Floating restore icon (hidden until minimized)
+    local RestoreIcon = create("TextButton", {
+        Name = "RestoreIcon",
+        Text = "AX",
+        Font = Enum.Font.GothamBold,
+        TextSize = 16,
+        TextColor3 = Color3.new(1, 1, 1),
+        BackgroundColor3 = Theme.Accent,
+        Size = UDim2.new(0, 46, 0, 46),
+        Position = UDim2.new(0, 20, 0, 20),
+        Visible = false,
+        Parent = ScreenGui,
+    }, {corner(23)})
+
+    -- Draggable restore icon
+    do
+        local dragging, dragStart, startPos
+        RestoreIcon.InputBegan:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+                dragging = true
+                dragStart = input.Position
+                startPos = RestoreIcon.Position
+            end
+        end)
+        UserInputService.InputChanged:Connect(function(input)
+            if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+                local delta = input.Position - dragStart
+                RestoreIcon.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+            end
+        end)
+        UserInputService.InputEnded:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+                dragging = false
+            end
+        end)
+    end
+
+    -- Drag main window from top bar
+    do
+        local dragging, dragStart, startPos
+        TopBar.InputBegan:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+                dragging = true
+                dragStart = input.Position
+                startPos = Main.Position
+            end
+        end)
+        UserInputService.InputChanged:Connect(function(input)
+            if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+                local delta = input.Position - dragStart
+                Main.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+            end
+        end)
+        UserInputService.InputEnded:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+                dragging = false
+            end
+        end)
+    end
+
+    -- Minimize / restore logic
+    local minimized = false
+    local function setMinimized(state)
+        minimized = state
+        Main.Visible = not state
+        RestoreIcon.Visible = state
+    end
+    MinimizeBtn.MouseButton1Click:Connect(function() setMinimized(true) end)
+    RestoreIcon.MouseButton1Click:Connect(function() setMinimized(false) end)
+
+    -- Tab bar (top row of tab names, under top bar)
+    local TabBar = create("Frame", {
+        Name = "TabBar",
+        Size = UDim2.new(1, 0, 0, 34),
+        Position = UDim2.new(0, 0, 0, 46),
+        BackgroundTransparency = 1,
+        Parent = Main,
+    })
+    local TabBarLayout = create("UIListLayout", {
+        FillDirection = Enum.FillDirection.Horizontal,
+        Padding = UDim.new(0, 4),
+        HorizontalAlignment = Enum.HorizontalAlignment.Left,
+        VerticalAlignment = Enum.VerticalAlignment.Center,
+    })
+    TabBarLayout.Parent = TabBar
+    create("UIPadding", {PaddingLeft = UDim.new(0, 16)}).Parent = TabBar
+
+    -- underline indicator
+    local Indicator = create("Frame", {
+        Size = UDim2.new(0, 40, 0, 2),
+        BackgroundColor3 = Theme.Accent,
+        BorderSizePixel = 0,
+        Parent = TabBar,
+    })
+
+    -- Content container (two-column grid like the screenshot)
+    local Content = create("Frame", {
+        Name = "Content",
+        Size = UDim2.new(1, -32, 1, -96),
+        Position = UDim2.new(0, 16, 0, 88),
+        BackgroundTransparency = 1,
+        Parent = Main,
+    })
+
+    local Window = setmetatable({
+        ScreenGui = ScreenGui,
+        Main = Main,
+        TabBar = TabBar,
+        Content = Content,
+        Indicator = Indicator,
+        Tabs = {},
+        SetMinimized = setMinimized,
+    }, AuroraUI)
+
+    return Window
+end
+
+--// TABS ------------------------------------------------------------------------
+function AuroraUI:AddTab(name)
+    local self_ = self
+
+    local TabButton = create("TextButton", {
+        Text = name,
+        Font = Enum.Font.GothamSemibold,
+        TextSize = 14,
+        TextColor3 = Theme.TextDim,
+        BackgroundTransparency = 1,
+        AutomaticSize = Enum.AutomaticSize.X,
+        Size = UDim2.new(0, 0, 1, 0),
+        Parent = self_.TabBar,
+    })
+    create("UIPadding", {PaddingLeft = UDim.new(0, 10), PaddingRight = UDim.new(0, 10)}).Parent = TabButton
+
+    local Page = create("Frame", {
+        Name = name .. "_Page",
+        Size = UDim2.new(1, 0, 1, 0),
+        BackgroundTransparency = 1,
+        Visible = false,
+        Parent = self_.Content,
+    })
+
+    -- Two columns like the mockup (left = main list, right = extra checks)
+    local LeftCol = create("Frame", {
+        Size = UDim2.new(0.5, -8, 1, 0),
+        BackgroundTransparency = 1,
+        Parent = Page,
+    })
+    local RightCol = create("Frame", {
+        Size = UDim2.new(0.5, -8, 1, 0),
+        Position = UDim2.new(0.5, 8, 0, 0),
+        BackgroundTransparency = 1,
+        Parent = Page,
+    })
+
+    for _, col in ipairs({LeftCol, RightCol}) do
+        local layout = create("UIListLayout", {
+            Padding = UDim.new(0, 8),
+            SortOrder = Enum.SortOrder.LayoutOrder,
+        })
+        layout.Parent = col
+    end
+
+    local Tab = {
+        Name = name,
+        Button = TabButton,
+        Page = Page,
+        LeftCol = LeftCol,
+        RightCol = RightCol,
+        _rowCount = 0,
+    }
+
+    TabButton.MouseButton1Click:Connect(function()
+        for _, t in ipairs(self_.Tabs) do
+            t.Page.Visible = false
+            t.Button.TextColor3 = Theme.TextDim
+        end
+        Page.Visible = true
+        TabButton.TextColor3 = Theme.TextPrimary
+        tween(self_.Indicator, {Position = UDim2.new(0, TabButton.AbsolutePosition.X - self_.TabBar.AbsolutePosition.X, 0, 32)}, 0.15)
+        tween(self_.Indicator, {Size = UDim2.new(0, TabButton.AbsoluteSize.X, 0, 2)}, 0.15)
+    end)
+
+    table.insert(self.Tabs, Tab)
+    if #self.Tabs == 1 then
+        Page.Visible = true
+        TabButton.TextColor3 = Theme.TextPrimary
+    end
+
+    --// AddToggle -----------------------------------------------------------
+    function Tab:AddToggle(label, default, callback, options)
+        options = options or {}
+        local column = options.column == "right" and self.RightCol or self.LeftCol
+
+        local Row = create("Frame", {
+            Size = UDim2.new(1, 0, 0, 40),
+            BackgroundColor3 = Theme.Section,
+            BorderSizePixel = 0,
+            LayoutOrder = self._rowCount,
+            Parent = column,
+        }, {corner(6)})
+        self._rowCount = self._rowCount + 1
+
+        create("TextLabel", {
+            Text = label,
+            Font = Enum.Font.Gotham,
+            TextSize = 13,
+            TextColor3 = Theme.TextPrimary,
+            BackgroundTransparency = 1,
+            Position = UDim2.new(0, 12, 0, 0),
+            Size = UDim2.new(0.55, 0, 1, 0),
+            TextXAlignment = Enum.TextXAlignment.Left,
+            Parent = Row,
+        })
+
+        -- right-aligned control cluster
+        local Controls = create("Frame", {
+            Size = UDim2.new(0, 90, 1, 0),
+            Position = UDim2.new(1, -100, 0, 0),
+            BackgroundTransparency = 1,
+            Parent = Row,
+        })
+        local ControlsLayout = create("UIListLayout", {
+            FillDirection = Enum.FillDirection.Horizontal,
+            VerticalAlignment = Enum.VerticalAlignment.Center,
+            HorizontalAlignment = Enum.HorizontalAlignment.Right,
+            Padding = UDim.new(0, 8),
+        })
+        ControlsLayout.Parent = Controls
+
+        -- color swatch (optional, added via SetColorPicker)
+        local ColorSwatch = create("Frame", {
+            Size = UDim2.new(0, 16, 0, 16),
+            BackgroundColor3 = Color3.fromRGB(255, 255, 255),
+            Visible = false,
+            LayoutOrder = 1,
+            Parent = Controls,
+        }, {corner(4)})
+
+        -- keybind icon (optional)
+        local KeybindIcon = create("TextLabel", {
+            Text = "⌨",
+            Font = Enum.Font.Gotham,
+            TextSize = 14,
+            TextColor3 = Theme.TextDim,
+            BackgroundTransparency = 1,
+            Size = UDim2.new(0, 18, 0, 18),
+            Visible = false,
+            LayoutOrder = 2,
+            Parent = Controls,
+        })
+
+        -- toggle switch
+        local SwitchBG = create("Frame", {
+            Size = UDim2.new(0, 34, 0, 18),
+            BackgroundColor3 = default and Theme.Accent or Theme.ToggleOff,
+            LayoutOrder = 3,
+            Parent = Controls,
+        }, {corner(9)})
+
+        local Knob = create("Frame", {
+            Size = UDim2.new(0, 14, 0, 14),
+            Position = default and UDim2.new(1, -16, 0.5, -7) or UDim2.new(0, 2, 0.5, -7),
+            BackgroundColor3 = Color3.new(1, 1, 1),
+            Parent = SwitchBG,
+        }, {corner(7)})
+
+        local SwitchBtn = create("TextButton", {
+            Text = "",
+            BackgroundTransparency = 1,
+            Size = UDim2.new(1, 0, 1, 0),
+            Parent = SwitchBG,
+        })
+
+        local state = default or false
+        local function setState(v)
+            state = v
+            tween(SwitchBG, {BackgroundColor3 = state and Theme.Accent or Theme.ToggleOff}, 0.15)
+            tween(Knob, {Position = state and UDim2.new(1, -16, 0.5, -7) or UDim2.new(0, 2, 0.5, -7)}, 0.15)
+            if callback then callback(state) end
+        end
+
+        SwitchBtn.MouseButton1Click:Connect(function()
+            setState(not state)
+        end)
+
+        local ToggleObj = {
+            Row = Row,
+            SetState = setState,
+            GetState = function() return state end,
+        }
+
+        function ToggleObj:SetColorPicker(color)
+            ColorSwatch.Visible = true
+            ColorSwatch.BackgroundColor3 = color or ColorSwatch.BackgroundColor3
+            -- clicking swatch could open a color picker popup; hook your own here
+        end
+
+        function ToggleObj:SetKeybind(enabled)
+            KeybindIcon.Visible = enabled ~= false
+        end
+
+        return ToggleObj
+    end
+
+    --// AddLabel (for section headers, if needed) ---------------------------
+    function Tab:AddSectionLabel(text, column)
+        local col = column == "right" and self.RightCol or self.LeftCol
+        create("TextLabel", {
+            Text = text,
+            Font = Enum.Font.GothamBold,
+            TextSize = 13,
+            TextColor3 = Theme.TextDim,
+            BackgroundTransparency = 1,
+            Size = UDim2.new(1, 0, 0, 24),
+            TextXAlignment = Enum.TextXAlignment.Left,
+            LayoutOrder = self._rowCount,
+            Parent = col,
+        })
+        self._rowCount = self._rowCount + 1
+    end
+
+    return Tab
+end
+
+return AuroraUI
